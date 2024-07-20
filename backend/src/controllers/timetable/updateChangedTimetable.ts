@@ -2,8 +2,10 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import {
   courseWithSectionsType,
+  namedNonEmptyStringType,
   sectionTypeList,
 } from "../../../../lib/src/index.js";
+import { env } from "../../config/server.js";
 import { AppDataSource } from "../../db.js";
 import { Course, Section, Timetable } from "../../entity/entities.js";
 import { validate } from "../../middleware/zodValidateRequest.js";
@@ -17,6 +19,7 @@ import { updateSectionWarnings } from "../../utils/updateWarnings.js";
 
 const dataSchema = z.object({
   body: z.object({
+    chronoSecret: namedNonEmptyStringType("chronoSecret"),
     course: courseWithSectionsType,
   }),
 });
@@ -25,6 +28,9 @@ export const updateChangedTimetableValidator = validate(dataSchema);
 
 export const updateChangedTimetable = async (req: Request, res: Response) => {
   try {
+    if (env.CHRONO_SECRET !== req.body.chronoSecret) {
+      return res.status(401).json({ message: "Chrono Secret is incorrect" });
+    }
     // Use a transaction because we will run many dependent mutations
     const queryRunner = AppDataSource.createQueryRunner();
     await queryRunner.connect();
