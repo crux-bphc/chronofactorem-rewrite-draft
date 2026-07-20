@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import {
@@ -35,22 +36,33 @@ export const updateChangedTimetableValidator = validate(dataSchema);
 
 export const updateChangedTimetable = async (req: Request, res: Response) => {
   const logger = req.log;
+  const queryRunner = AppDataSource.createQueryRunner();
+  let timetables: Timetable[] = [];
   try {
     if (env.CHRONO_SECRET !== req.body.chronoSecret) {
       return res.status(401).json({ message: "Chrono Secret is incorrect" });
     }
+    const course: Course = req.body.course;
     // Use a transaction because we will run many dependent mutations
-    const queryRunner = AppDataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
+    // fetch original course to check existence and original code
+    const originalCourse = await queryRunner.manager.findOne(Course, {
+      where: { id: course.id, archived: false },
+    });
+    if (!originalCourse) {
+      await queryRunner.rollbackTransaction();
+      return res.status(404).json({ message: "Course not found" });
+    }
 
     // Update the course's exam timings, also make sure that the course is not archived
-    const course: Course = req.body.course;
     try {
       await queryRunner.manager
         .createQueryBuilder()
         .update(Course)
         .set({
+          name: course?.name,
+          code: course?.code,
           midsemStartTime: course?.midsemStartTime,
           midsemEndTime: course?.midsemEndTime,
           compreStartTime: course?.compreStartTime,
@@ -61,6 +73,7 @@ export const updateChangedTimetable = async (req: Request, res: Response) => {
         .execute();
     } catch (err: any) {
       logger.error("Error while querying for course: ", err.message);
+      await queryRunner.rollbackTransaction();
       return res.status(500).json({ message: "Internal Server Error" });
     }
 
@@ -79,9 +92,29 @@ export const updateChangedTimetable = async (req: Request, res: Response) => {
         "Error while querying for course's section types: ",
         err.message,
       );
+      await queryRunner.rollbackTransaction();
+      return res.status(500).json({ message: "Internal Server Error" });
     }
 
-    let timetables: Timetable[] | null = null;
+    // fetch all sections from db to find deleted ones
+    const dbSections = await queryRunner.manager
+      .createQueryBuilder(Section, "section")
+      .where("section.courseId = :courseId", { courseId: course.id })
+      .getMany();
+    const dbSectionIds = new Set(dbSections.map((s) => s.id));
+    const incomingSectionIds = new Set(
+      course.sections.map((s: any) => s.id).filter(Boolean),
+    );
+
+    // new sections have no id or id not in db
+    const newSections = course.sections.filter(
+      (s: any) => !s.id || !dbSectionIds.has(s.id),
+    );
+    // deleted sections are in db but not in incoming
+    const deletedSections = dbSections.filter(
+      (s) => !incomingSectionIds.has(s.id),
+    );
+    const deletedSectionIds = new Set(deletedSections.map((s) => s.id));
 
     // Fetch the timetables that are affected, archived timetables cannot be affected
     try {
@@ -93,15 +126,39 @@ export const updateChangedTimetable = async (req: Request, res: Response) => {
         .getMany();
     } catch (err: any) {
       logger.error("Error while querying for timetable: ", err.message);
+      await queryRunner.rollbackTransaction();
       return res.status(500).json({ message: "Internal Server Error" });
     }
 
     for (const timetable of timetables) {
+      // rename course code in timings, warnings, and examtimes if code changed
+      if (course.code !== originalCourse.code) {
+        timetable.timings = timetable.timings.map((t) => {
+          if (t.startsWith(`${originalCourse.code}:`)) {
+            return t.replace(`${originalCourse.code}:`, `${course.code}:`);
+          }
+          return t;
+        });
+        timetable.warnings = timetable.warnings.map((w) => {
+          if (w.startsWith(`${originalCourse.code}:`)) {
+            return w.replace(`${originalCourse.code}:`, `${course.code}:`);
+          }
+          return w;
+        });
+        timetable.examTimes = timetable.examTimes.map((e) => {
+          if (e.startsWith(`${originalCourse.code}|`)) {
+            return e.replace(`${originalCourse.code}|`, `${course.code}|`);
+          }
+          return e;
+        });
+      }
+
       // For each timetable, check if the exam times have changed
       if (checkForExamTimingsChange(timetable, course)) {
         // If they have, remove the course's exams from the timings
         timetable.examTimes = timetable.examTimes.filter((examTime) => {
-          return examTime.split("|")[0] !== course?.code;
+          const code = examTime.split("|")[0];
+          return code !== originalCourse.code && code !== course?.code;
         });
 
         // Convert exam dates to actual dates from strings, since the
@@ -179,6 +236,23 @@ export const updateChangedTimetable = async (req: Request, res: Response) => {
             timetable.timings = [...timetable.timings, ...newTimes];
             timetable.sections = [...timetable.sections, newSection];
           }
+        } else if (deletedSectionIds.has(section.id)) {
+          // section was deleted entirely in this edit, drop it from the timetable
+          removeSection(timetable, section);
+          await queryRunner.manager
+            .createQueryBuilder()
+            .relation(Timetable, "sections")
+            .of(timetable)
+            .remove(section);
+          timetable.draft = true;
+          timetable.private = true;
+          timetable.warnings = updateSectionWarnings(
+            course.code,
+            section,
+            requiredSectionTypes,
+            false,
+            timetable.warnings,
+          );
         }
       }
 
@@ -186,7 +260,10 @@ export const updateChangedTimetable = async (req: Request, res: Response) => {
       // remove its exam timings as well, removing it fully from the timetable
       const sameCourseSections: Section[] = timetable.sections.filter(
         (currentSection) => {
-          return currentSection.courseId === course.id;
+          return (
+            currentSection.courseId === course.id &&
+            !deletedSectionIds.has(currentSection.id)
+          );
         },
       );
       if (sameCourseSections.length === 0) {
@@ -219,55 +296,107 @@ export const updateChangedTimetable = async (req: Request, res: Response) => {
       }),
     );
 
+    // delete sections from db that were removed from the course entirely
+    if (deletedSections.length > 0) {
+      await queryRunner.manager
+        .createQueryBuilder()
+        .delete()
+        .from(Section)
+        .where("id IN (:...ids)", { ids: deletedSections.map((s) => s.id) })
+        .execute();
+    }
+
     // Regardless of whether or not a section was present in a timetable,
-    // update the section's timings
+    // update the section's fields (schedule, instructors, type, section number)
     try {
-      for (const section of course.sections) {
+      for (const section of course.sections.filter(
+        (s: any) => s.id && dbSectionIds.has(s.id),
+      )) {
         await queryRunner.manager
           .createQueryBuilder()
-          .update(Section, { roomTime: section.roomTime })
+          .update(Section)
+          .set({
+            roomTime: section.roomTime,
+            instructors: section.instructors,
+            type: section.type,
+            number: section.number,
+          })
           .where("section.id = :id", { id: section?.id })
           .execute();
       }
     } catch (err: any) {
-      logger.error("Error while querying for course: ", err.message);
+      logger.error("Error while updating sections: ", err.message);
+      await queryRunner.rollbackTransaction();
       return res.status(500).json({ message: "Internal Server Error" });
     }
+
+    // insert brand new sections added in this edit
+    const newSectionValues = newSections.map((s: any) => ({
+      id: s.id || randomUUID(),
+      courseId: course.id,
+      type: s.type,
+      number: s.number,
+      instructors: s.instructors,
+      roomTime: s.roomTime,
+      createdAt: s.createdAt ? new Date(s.createdAt) : new Date(),
+    }));
+    if (newSectionValues.length > 0) {
+      await queryRunner.manager
+        .createQueryBuilder()
+        .insert()
+        .into(Section)
+        .values(newSectionValues)
+        .execute();
+    }
+
     // After everything passes fine, commit the transaction
     await queryRunner.commitTransaction();
-    queryRunner.release();
+  } catch (err: any) {
+    logger.error("Transaction failed: ", err.message);
+    if (queryRunner.isTransactionActive) {
+      await queryRunner.rollbackTransaction();
+    }
+    return res.status(500).json({ message: "Internal Server Error" });
+  } finally {
+    await queryRunner.release();
+  }
 
-    // update course in search service
+  // update course in search service
+  try {
+    const courseObj = req.body.course;
+    await removeCourse(courseObj.id, logger);
+    const updatedCourseForSearch = await AppDataSource.manager
+      .createQueryBuilder(Course, "course")
+      .leftJoinAndSelect("course.sections", "section")
+      .where("course.id = :id", { id: courseObj.id })
+      .getOne();
+    if (updatedCourseForSearch) {
+      await addCourse(updatedCourseForSearch, logger);
+    }
+  } catch (_err: any) {
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+
+  // update timetables in search service
+  for (const timetable of timetables) {
     try {
-      await removeCourse(course.id, logger);
-      await addCourse(course, logger);
+      await removeTimetable(timetable.id, logger);
     } catch (_err: any) {
       return res.status(500).json({ message: "Internal Server Error" });
     }
-
-    // update timetables in search service
-    for (const timetable of timetables) {
+    if (!timetable.draft && !timetable.private) {
       try {
-        await removeTimetable(timetable.id, logger);
-      } catch (_err: any) {
-        return res.status(500).json({ message: "Internal Server Error" });
-      }
-      if (!timetable.draft && !timetable.private) {
         const timetableWithSections = await timetableRepository
           .createQueryBuilder("timetable")
           .leftJoinAndSelect("timetable.sections", "section")
           .where("timetable.id = :id", { id: timetable.id })
           .getOneOrFail();
-        try {
-          await addTimetable(timetableWithSections, null, logger);
-        } catch (_err: any) {
-          return res.status(500).json({ message: "Internal Server Error" });
-        }
+        await addTimetable(timetableWithSections, null, logger);
+      } catch (_err: any) {
+        return res.status(500).json({ message: "Internal Server Error" });
       }
     }
-    return res.json({ message: "Timetable successfully updated" });
-  } catch (err: any) {
-    logger.error(err);
-    return res.status(500).json({ message: "Internal Server Error" });
   }
+
+  return res.json({ message: "Timetable successfully updated" });
 };

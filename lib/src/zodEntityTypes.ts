@@ -23,16 +23,16 @@ export const namedCourseType = (name?: string) =>
       name: namedNonEmptyStringType(addNameToString("course name", name)),
       midsemStartTime: namedISOTimestampType(
         addNameToString("course midsemStartTime", name),
-      ),
+      ).nullable(),
       midsemEndTime: namedISOTimestampType(
         addNameToString("course midsemEndTime", name),
-      ),
+      ).nullable(),
       compreStartTime: namedISOTimestampType(
         addNameToString("course compreStartTime", name),
-      ),
+      ).nullable(),
       compreEndTime: namedISOTimestampType(
         addNameToString("course compreEndTime", name),
-      ),
+      ).nullable(),
       archived: namedBooleanType(addNameToString("course archived", name)),
       acadYear: namedYearType(addNameToString("course acadYear", name)),
       semester: namedSemesterType(addNameToString("course", name)),
