@@ -1,9 +1,9 @@
 import type { Request, Response } from "express";
+import { timetableIDType } from "lib";
 import { z } from "zod";
-import { timetableIDType } from "../../../../lib/src/index.js";
 import { validate } from "../../middleware/zodValidateRequest.js";
-import { timetableRepository } from "../../repositories/timetableRepository.js";
-import sqids, { validSqid } from "../../utils/sqids.js";
+import { timetableRepository } from "../../repositories/index.js";
+import { decodeTimetableSqidOr404 } from "./helpers.js";
 
 const dataSchema = z.object({
   params: z.object({
@@ -17,9 +17,9 @@ export const getTimetableById = async (req: Request, res: Response) => {
   const logger = req.log;
   try {
     const id = req.params.id as string;
-    const dbID = sqids.decode(id);
-    if (!validSqid(dbID)) {
-      return res.status(404).json({ message: "Timetable does not exist" });
+    const dbID = decodeTimetableSqidOr404(req, res);
+    if (dbID === null) {
+      return;
     }
 
     const timetable = await timetableRepository

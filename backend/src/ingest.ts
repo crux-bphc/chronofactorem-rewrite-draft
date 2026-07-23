@@ -1,4 +1,3 @@
-import "dotenv/config";
 import { AppDataSource, initializeDataSource } from "./db.js";
 import { ingestJSON } from "./ingestJSON.js";
 import timetableJSON from "./timetable.json" with { type: "json" };
@@ -14,5 +13,10 @@ initializeDataSource()
     await ingestJSON(timetableJSON, queryRunner);
 
     await queryRunner.release();
+    await AppDataSource.destroy();
   })
-  .catch((error) => console.log(error));
+  .catch(async (error) => {
+    console.log(error);
+    process.exitCode = 1;
+    if (AppDataSource.isInitialized) await AppDataSource.destroy();
+  });

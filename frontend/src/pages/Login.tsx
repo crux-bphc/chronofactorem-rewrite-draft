@@ -6,7 +6,7 @@ import { authStatusQueryOptions } from "@/data-access/hooks/useAuthStatus";
 import { ModeToggle } from "../components/ModeToggle";
 import { Button } from "../components/ui/button";
 import { useToast } from "../components/ui/use-toast";
-import { rootRoute, router } from "../main";
+import { rootRoute, router } from "../router";
 
 const loginRoute = new Route({
   getParentRoute: () => rootRoute,
@@ -55,11 +55,9 @@ function Login() {
             asChild
             className="md:mt-6 mt-2 rounded-lg flex px-4 py-2 items-center"
           >
-            <a href="/api/auth/google">
+            <a href="/api/auth/logto">
               <AtSign className="mr-2 md:h-4 md:w-4 w-3 h-3" />
-              <span className="font-bold md:text-lg text-sm">
-                Login with Google
-              </span>
+              <span className="font-bold md:text-lg text-sm">Login</span>
             </a>
           </Button>
           <a
@@ -67,6 +65,14 @@ function Login() {
             className="w-fit md:mt-8 mt-2 text-muted-foreground md:text-lg text-sm hover:underline underline-offset-4"
           >
             About ChronoFactorem
+          </a>
+          <p
+            className="w-fit md:mt-12 mt-3 text-muted-foreground md:text-lg text-sm"
+          >
+            Draft Timetable for 2026-27 Sem 1 Out Now!!
+          </p>
+          <a href="https://draft.chrono.crux-bphc.com/" className="w-fit md:mt-2 mt-1 text-foreground md:text-lg text-sm hover:underline underline-offset-4">
+            Check it out here
           </a>
         </div>
       </div>

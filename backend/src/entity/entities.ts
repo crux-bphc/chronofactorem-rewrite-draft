@@ -1,4 +1,10 @@
 import {
+  approvedDegreeList,
+  approvedSectionTypeList,
+  type degreeEnum,
+  type sectionTypeEnum,
+} from "lib";
+import {
   Column,
   CreateDateColumn,
   Entity,
@@ -12,12 +18,6 @@ import {
   Unique,
   UpdateDateColumn,
 } from "typeorm";
-import {
-  approvedDegreeList,
-  approvedSectionTypeList,
-  type degreeEnum,
-  type sectionTypeEnum,
-} from "../../../lib/src/index.js";
 
 @Entity()
 export class User {
@@ -153,16 +153,16 @@ export class Course {
   sections!: Section[];
 
   @Column({ name: "midsem_start_time", type: "timestamptz", nullable: true })
-  midsemStartTime!: Date;
+  midsemStartTime!: Date | null;
 
   @Column({ name: "midsem_end_time", type: "timestamptz", nullable: true })
-  midsemEndTime!: Date;
+  midsemEndTime!: Date | null;
 
   @Column({ name: "compre_start_time", type: "timestamptz", nullable: true })
-  compreStartTime!: Date;
+  compreStartTime!: Date | null;
 
   @Column({ name: "compre_end_time", type: "timestamptz", nullable: true })
-  compreEndTime!: Date;
+  compreEndTime!: Date | null;
 
   @Column({ type: "boolean", default: false })
   archived!: boolean;
