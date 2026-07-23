@@ -6,7 +6,6 @@ import type { Timetable, User } from "../../entity/entities.js";
 import { validate } from "../../middleware/zodValidateRequest.js";
 import { timetableRepository } from "../../repositories/timetableRepository.js";
 import { userRepository } from "../../repositories/userRepository.js";
-import { removeTimetable } from "../../utils/search.js";
 import sqids, { validSqid } from "../../utils/sqids.js";
 
 const dataSchema = z.object({
@@ -36,7 +35,7 @@ export const deleteTimetable = async (req: Request, res: Response) => {
     return res.status(401).json({ message: "unregistered user" });
   }
 
-  const dbID = sqids.decode(req.params.id);
+  const dbID = sqids.decode(req.params.id as string);
   if (!validSqid(dbID)) {
     return res.status(404).json({ message: "Timetable does not exist" });
   }
@@ -72,11 +71,6 @@ export const deleteTimetable = async (req: Request, res: Response) => {
     logger.error("Error while deleting timetable: ", err.message);
 
     res.status(500).json({ message: "Internal Server Error" });
-  }
-  try {
-    await removeTimetable(timetable.id, logger);
-  } catch (_err: any) {
-    return res.status(500).json({ message: "Internal Server Error" });
   }
   return res.json({ message: "timetable deleted" });
 };
